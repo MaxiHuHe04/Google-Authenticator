@@ -1,7 +1,7 @@
 package me.maxih.googleauth
 
 import java.awt.{SystemTray, TrayIcon}
-import java.io.{File, FileOutputStream}
+import java.io._
 import java.util.prefs.Preferences
 
 import com.github.windpapi4j.WinDPAPI
@@ -32,6 +32,7 @@ import scalafx.scene.input.MouseEvent
 import scalafx.scene.layout._
 import scalafx.scene.paint.Color
 import scalafx.scene.{Scene, control}
+import scalafx.stage.FileChooser
 
 import scala.util.Try
 
@@ -91,6 +92,49 @@ object GoogleAuthenticator extends JFXApp {
               Platform.runLater(aboutDialog.initOwner(stage))
 
               override def onClicked(event: MouseEvent): Unit = aboutDialog.showAndWait()
+            },
+
+            new fx.MenuButton(new Image(getClass.getResourceAsStream("/backup.png"))) {
+              val Save = new ButtonType("Save")
+              val Load = new ButtonType("Load")
+
+              val backupDialog = new Alert(AlertType.Confirmation, "", Save, Load, ButtonType.Cancel)
+              backupDialog.headerText = "What do you want to do?"
+              backupDialog.contentText = "Have in mind that all accounts will be overwritten when you load a backup!"
+
+              Platform.runLater(backupDialog.initOwner(stage))
+
+
+              val backupFileChooser = new FileChooser()
+              backupFileChooser.extensionFilters.add(new FileChooser.ExtensionFilter("Backup", "*.xml"))
+
+              override def onClicked(event: MouseEvent): Unit = {
+                val prefs = preferences
+
+                backupDialog.showAndWait() match {
+                  case Some(Save) =>
+                    // TODO: Save with AES to allow loading on other computers
+                    // TODO: Own file format instead of exporting node (encrypted)
+                    // TODO: Convert it with PIN to WinDPAPI on loading (only on windows)
+
+                    val file = backupFileChooser.showSaveDialog(stage)
+                    if (file != null) prefs.exportNode(new BufferedOutputStream(new FileOutputStream(file)))
+
+                  case Some(Load) =>
+                    val file = backupFileChooser.showOpenDialog(stage)
+                    if (file != null) {
+                      val inputStream = new BufferedInputStream(new FileInputStream(file))
+                      saveAccounts()
+                      accounts.clear()
+                      Preferences.importPreferences(inputStream)
+                      prefs.flush()
+                      loadAccounts()
+                    }
+
+                  case _ =>
+                }
+
+              }
             },
 
             new Region {
@@ -163,7 +207,7 @@ object GoogleAuthenticator extends JFXApp {
 
                 def isValid: Boolean = {
                   if (nameField.text.value.trim.isEmpty || secretField.text.value.trim.isEmpty) return false
-                  if (nameField.text.value.trim.equalsIgnoreCase("accounts") || nameField.text.value.contains("\0")) return false // conflict with saveAccounts key
+                  if (nameField.text.value.trim.equalsIgnoreCase("accounts") || nameField.text.value.contains(";;;;")) return false // conflict with saveAccounts key
 
                   for (account <- accounts if account.accountName.value.trim.equals(nameField.text.value.trim)) return false
 
@@ -190,6 +234,8 @@ object GoogleAuthenticator extends JFXApp {
               }
 
               override def onClicked(event: MouseEvent): Unit = {
+                mode.value = Mode.Normal
+
                 val result = accountAddDialog.showAndWait()
 
                 result match {
@@ -235,10 +281,7 @@ object GoogleAuthenticator extends JFXApp {
 
   }
 
-  accounts.appendAll(getAccounts.map({
-    case (name, (count, secret)) if count >= 0 => CounterAuthEntry(name, secret, count)
-    case (name, (_, secret)) => TimedAuthEntry(name, secret)
-  }))
+  loadAccounts()
 
 
   Scheduler().scheduleAtRate(Platform.runLater(accounts.forEach(_.update())), 0, 1)
@@ -263,9 +306,14 @@ object GoogleAuthenticator extends JFXApp {
     saveAccounts()
   }
 
+  def loadAccounts(): Unit = accounts.appendAll(getAccounts.map({
+    case (name, (count, secret)) if count >= 0 => CounterAuthEntry(name, secret, count)
+    case (name, (_, secret)) => TimedAuthEntry(name, secret)
+  }))
+
   private def getAccounts: Map[String, (Int, String)] = {
     val prefs = preferences
-    val keys = prefs.get("accounts", "\0").split("\0")
+    val keys = prefs.get("accounts", ";;;;").split(";;;;")
 
     keys.iterator.map(k => k -> decryptSecret(prefs.getByteArray(k, Array()))).toMap
   }
@@ -275,7 +323,7 @@ object GoogleAuthenticator extends JFXApp {
 
     prefs.clear()
 
-    prefs.put("accounts", accounts.map(_.accountName.value).mkString("\0"))
+    prefs.put("accounts", accounts.map(_.accountName.value).mkString(";;;;"))
     if (prefs.get("accounts", "") == "") prefs.remove("accounts")
 
 
@@ -361,8 +409,8 @@ object GoogleAuthenticator extends JFXApp {
       case Some(buttonType) if buttonType == resetButtonType =>
         accounts.clear()
 
-        val tmpBackupFile = File.createTempFile("GoogleAuthenticatorAccountResetBackup", ".bak")
-        preferences.exportNode(new FileOutputStream(tmpBackupFile))
+        val tmpBackupFile = File.createTempFile("GoogleAuthenticatorAccountResetBackup", ".xml")
+        preferences.exportNode(new BufferedOutputStream(new FileOutputStream(tmpBackupFile)))
         preferences.clear()
         println("If this was accidentally, you can restore the accounts with this file:\n" + tmpBackupFile.getAbsolutePath)
 
