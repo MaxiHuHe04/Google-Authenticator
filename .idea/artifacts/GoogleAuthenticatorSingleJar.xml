@@ -1,0 +1,15 @@
+<component name="ArtifactManager">
+  <artifact type="jar" build-on-make="true" name="GoogleAuthenticatorSingleJar">
+    <output-path>$PROJECT_DIR$/out/artifacts/GoogleAuthenticatorSingleJar</output-path>
+    <root id="archive" name="Google Authenticator.jar">
+      <element id="module-output" name="google-authenticator-build" />
+      <element id="module-output" name="google-authenticator" />
+      <element id="extracted-dir" path="$USER_HOME$/.ivy2/cache/commons-codec/commons-codec/jars/commons-codec-1.11.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$USER_HOME$/.ivy2/cache/org.scala-lang/scala-library/jars/scala-library-2.12.5.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$USER_HOME$/.ivy2/cache/org.scalafx/scalafx_2.12/jars/scalafx_2.12-8.0.144-R12.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$USER_HOME$/.ivy2/cache/net.java.dev.jna/jna/jars/jna-4.2.1.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$USER_HOME$/.ivy2/cache/com.github.peter-gergely-horvath/windpapi4j/jars/windpapi4j-1.0.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$USER_HOME$/.ivy2/cache/org.scala-lang/scala-reflect/jars/scala-reflect-2.12.5.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>
