@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="GoogleAuthenticator" type="Application" factoryName="Application">
+  <configuration default="false" name="GoogleAuthenticator" type="Application" factoryName="Application" singleton="true">
     <option name="MAIN_CLASS_NAME" value="me.maxih.googleauth.GoogleAuthenticator" />
     <module name="google-authenticator" />
     <option name="WORKING_DIRECTORY" value="file://$PROJECT_DIR$" />

@@ -4,55 +4,48 @@ import java.awt.{SystemTray, TrayIcon}
 import java.io._
 import java.util.prefs.Preferences
 
-import com.github.windpapi4j.WinDPAPI
 import javafx.collections.ListChangeListener
-import javafx.scene
-import javafx.scene.control.{Button => JFXButton}
 import javafx.scene.{Node => JFXNode}
-import javafx.stage.{Stage => JFXStage}
-import javax.crypto.Cipher
-import javax.crypto.spec.{IvParameterSpec, SecretKeySpec}
+import javax.crypto.spec.SecretKeySpec
 import javax.imageio.ImageIO
 import me.maxih.googleauth.authentry.{AuthEntry, CounterAuthEntry, TimedAuthEntry}
-import me.maxih.googleauth.fx.PINInputDialog
-import me.maxih.googleauth.util.Scheduler
+import me.maxih.googleauth.util.SecretsHelper.HexBytes
 import me.maxih.googleauth.util.Utils._
+import me.maxih.googleauth.util.{Scheduler, SecretsHelper}
 import org.apache.commons.codec.binary.Base32
-import org.apache.commons.codec.digest.DigestUtils
 import scalafx.application.JFXApp.PrimaryStage
 import scalafx.application.{JFXApp, Platform}
 import scalafx.beans.property.ObjectProperty
 import scalafx.collections.ObservableBuffer
 import scalafx.geometry.Insets
 import scalafx.scene.control.Alert.AlertType
-import scalafx.scene.control.ButtonBar.ButtonData
 import scalafx.scene.control._
 import scalafx.scene.image.Image
 import scalafx.scene.input.MouseEvent
 import scalafx.scene.layout._
-import scalafx.scene.paint.Color
 import scalafx.scene.{Scene, control}
 import scalafx.stage.FileChooser
 
-import scala.util.Try
-
+import scala.collection.mutable
 
 /**
   * Created by Maxi H. on 11.04.2018
   */
 object GoogleAuthenticator extends JFXApp {
   val accounts = new ObservableBuffer[AuthEntry]()
-  var secretPassword: Option[SecretKeySpec] = None
-  val winDPAPI: Option[WinDPAPI] = if (WinDPAPI.isPlatformSupported) Some(WinDPAPI.newInstance()) else None
 
   val mode: ObjectProperty[Mode.Mode] = new ObjectProperty[Mode.Mode](null, "", Mode.Normal)
 
 
   // Requires Java Cryptography Extension (JCE) Unlimited Strength Jurisdiction Policy Files
-  val EXTRA_SECURE_SECRET_KEY: Boolean = parameters.unnamed.contains("--extra-secure") || parameters.unnamed.contains("-s")
+  SecretsHelper.extraSecure = parameters.unnamed.contains("--extra-secure") || parameters.unnamed.contains("-s")
 
 
-  if (winDPAPI.isEmpty || parameters.unnamed.contains("--force-pass") || parameters.unnamed.contains("-p")) this.secretPassword = Some(askSecretPassword(4))
+  if (SecretsHelper.winDPAPI.isEmpty || parameters.unnamed.contains("--force-pass") || parameters.unnamed.contains("-p"))
+    SecretsHelper.secretPassword = SecretsHelper.askPassword(4).getOrElse({
+      System.exit(0)
+      None
+    })
 
 
   stage = new PrimaryStage {
@@ -106,35 +99,26 @@ object GoogleAuthenticator extends JFXApp {
 
 
               val backupFileChooser = new FileChooser()
-              backupFileChooser.extensionFilters.add(new FileChooser.ExtensionFilter("Backup", "*.xml"))
+              backupFileChooser.extensionFilters.add(new FileChooser.ExtensionFilter("Backup", "*.bak"))
 
-              override def onClicked(event: MouseEvent): Unit = {
-                val prefs = preferences
+              override def onClicked(event: MouseEvent): Unit = backupDialog.showAndWait() match {
+                case Some(Save) =>
+                  val file = backupFileChooser.showSaveDialog(stage)
+                  if (file != null) {
+                    val key = SecretsHelper.askPassword(6, "Please enter a PIN code to lock the backup.", emptyAllowed = true)
+                    if (key.isDefined) backupAccounts(file, key.get)
+                  }
 
-                backupDialog.showAndWait() match {
-                  case Some(Save) =>
-                    // TODO: Save with AES to allow loading on other computers
-                    // TODO: Own file format instead of exporting node (encrypted)
-                    // TODO: Convert it with PIN to WinDPAPI on loading (only on windows)
+                case Some(Load) =>
+                  val file = backupFileChooser.showOpenDialog(stage)
+                  if (file != null) {
+                    val key = SecretsHelper.askPassword(6, "Please enter a PIN code to unlock the backup.", emptyAllowed = true)
+                    if (key.isDefined) loadBackup(file, key.get)
+                  }
 
-                    val file = backupFileChooser.showSaveDialog(stage)
-                    if (file != null) prefs.exportNode(new BufferedOutputStream(new FileOutputStream(file)))
-
-                  case Some(Load) =>
-                    val file = backupFileChooser.showOpenDialog(stage)
-                    if (file != null) {
-                      val inputStream = new BufferedInputStream(new FileInputStream(file))
-                      saveAccounts()
-                      accounts.clear()
-                      Preferences.importPreferences(inputStream)
-                      prefs.flush()
-                      loadAccounts()
-                    }
-
-                  case _ =>
-                }
-
+                case _ =>
               }
+
             },
 
             new Region {
@@ -281,7 +265,7 @@ object GoogleAuthenticator extends JFXApp {
 
   }
 
-  loadAccounts()
+  loadAccounts(getAccounts)
 
 
   Scheduler().scheduleAtRate(Platform.runLater(accounts.forEach(_.update())), 0, 1)
@@ -306,7 +290,57 @@ object GoogleAuthenticator extends JFXApp {
     saveAccounts()
   }
 
-  def loadAccounts(): Unit = accounts.appendAll(getAccounts.map({
+  def backupAccounts(file: File, key: Option[SecretKeySpec]): Unit = {
+    val out = new BufferedOutputStream(new FileOutputStream(file))
+    out.write(if (key.isDefined) 1 else 0)
+    out.write('\n')
+    out.write(accounts.map(account => account.accountName.value + "\u0000" + SecretsHelper.encryptSecret(account.secret, if (account.isTimed) -1 else account.asInstanceOf[CounterAuthEntry].otp.counter, key, forceKey = true).toHexString).mkString("\n").getBytes())
+    out.close()
+  }
+
+  def loadBackup(file: File, key: Option[SecretKeySpec]): Unit = {
+    val out = new BufferedReader(new FileReader(file))
+    val isEncrypted = out.read()
+    out.read()
+    val lines = out.lines()
+    if (isEncrypted == 1 && key.isEmpty) {
+      SecretsHelper.showWrongPassword(false)
+      return
+    }
+
+    val backupAccounts = mutable.Map[String, (Int, String)]()
+
+    lines.forEach(line => {
+      val split = line.split("\u0000")
+      if (split.length != 2) {
+        showMalformedBackup()
+        return
+      }
+      try backupAccounts(split(0)) = SecretsHelper.decryptSecret(SecretsHelper.hexStringToBytes(split(1)), if (isEncrypted == 1) key else None, {
+        SecretsHelper.showWrongPassword(false); return
+      }, forceKey = true)
+      catch {
+        case _: NumberFormatException =>
+          showMalformedBackup()
+          return
+      }
+    })
+
+
+    loadAccounts(backupAccounts.toMap)
+    saveAccounts()
+    accounts.clear()
+    loadAccounts(getAccounts)
+  }
+
+  def showMalformedBackup(): Unit = {
+    val alert = new Alert(AlertType.Error, "The file you selected isn't a correct backup!", ButtonType.Close)
+    alert.initOwner(stage)
+    alert.headerText = "Malformed backup!"
+    alert.show()
+  }
+
+  def loadAccounts(accounts: Map[String, (Int, String)]): Unit = this.accounts.appendAll(accounts.map({
     case (name, (count, secret)) if count >= 0 => CounterAuthEntry(name, secret, count)
     case (name, (_, secret)) => TimedAuthEntry(name, secret)
   }))
@@ -315,7 +349,7 @@ object GoogleAuthenticator extends JFXApp {
     val prefs = preferences
     val keys = prefs.get("accounts", ";;;;").split(";;;;")
 
-    keys.iterator.map(k => k -> decryptSecret(prefs.getByteArray(k, Array()))).toMap
+    keys.iterator.map(k => k -> SecretsHelper.decryptSecret(prefs.getByteArray(k, Array()))).toMap
   }
 
   private def saveAccounts(): Unit = {
@@ -330,96 +364,12 @@ object GoogleAuthenticator extends JFXApp {
     for (account <- accounts) {
       val currentCounter = if (account.isTimed) -1 else account.asInstanceOf[CounterAuthEntry].otp.counter
 
-      prefs.putByteArray(account.accountName.value, encryptSecret(account.secret, currentCounter))
+      prefs.putByteArray(account.accountName.value, SecretsHelper.encryptSecret(account.secret, currentCounter))
     }
 
   }
 
-  private def preferences: Preferences = Preferences.userNodeForPackage(getClass)
-
-
-  private def encryptSecret(secret: String, currentCounter: Int = -1): Array[Byte] = {
-    val original = currentCounter + "\0" + secret
-
-    if (winDPAPI.isDefined && secretPassword.isEmpty) winDPAPI.get.protectData(original.getBytes())
-    else if (secretPassword.isDefined) {
-      val iv = Array[Byte](0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-      val ivSpec = new IvParameterSpec(iv)
-
-      val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-      cipher.init(Cipher.ENCRYPT_MODE, secretPassword.get, ivSpec)
-
-      cipher.doFinal(original.getBytes())
-    } else throw new IllegalStateException("No secret password!")
-  }
-
-  private def decryptSecret(encrypted: Array[Byte]): (Int, String) = {
-    def decode(encoded: Array[Byte]): (Int, String) = {
-      val split = new String(encoded).split("\0")
-      (split(0).toInt, split(1))
-    }
-
-    if (winDPAPI.isDefined && secretPassword.isEmpty) decode(winDPAPI.get.unprotectData(encrypted))
-    else if (secretPassword.isDefined) {
-      val iv = Array[Byte](0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-      val ivSpec = new IvParameterSpec(iv)
-
-      val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-      cipher.init(Cipher.DECRYPT_MODE, secretPassword.get, ivSpec)
-
-      val decrypted = Try(cipher.doFinal(encrypted)).getOrElse(wrongPassword())
-
-      decode(decrypted)
-    } else throw new IllegalStateException("No secret password!")
-  }
-
-
-  private def askSecretPassword(length: Int): SecretKeySpec = {
-    val dialog = new PINInputDialog(length)
-    dialog.dialogPane.value.getScene.getWindow.asInstanceOf[JFXStage].getIcons.add(new Image(getClass.getResourceAsStream("/icon.png")))
-    dialog.showAndWait() match {
-      case Some(pass: String) =>
-        if (EXTRA_SECURE_SECRET_KEY) new SecretKeySpec(DigestUtils.sha256(pass.getBytes()), "AES")
-        else new SecretKeySpec(DigestUtils.sha1(pass.getBytes()).splitAt(16)._1, "AES")
-
-      case _ =>
-        System.exit(0)
-        null
-    }
-  }
-
-  private def wrongPassword(): Nothing = {
-    val resetButtonType = new control.ButtonType("RESET", ButtonData.OKDone)
-    val alert = new Alert(AlertType.Error, "", resetButtonType, control.ButtonType.Close) {
-
-      val resetButton: JFXButton = this.dialogPane.value.lookupButton(resetButtonType).asInstanceOf[JFXButton]
-      resetButton.setDefaultButton(false)
-      resetButton.setTextFill(Color.DarkRed)
-
-      this.dialogPane.value.lookupButton(ButtonType.Close).asInstanceOf[scene.control.Button].setDefaultButton(true)
-
-      this.headerText = "Wrong password!"
-      this.contentText = "If you reset the accounts, you won't be able to log in to any of them!"
-
-      this.dialogPane.value.getScene.getWindow.asInstanceOf[JFXStage].getIcons.add(new Image(getClass.getResourceAsStream("/icon.png")))
-
-    }
-
-    alert.showAndWait() match {
-      case Some(buttonType) if buttonType == resetButtonType =>
-        accounts.clear()
-
-        val tmpBackupFile = File.createTempFile("GoogleAuthenticatorAccountResetBackup", ".xml")
-        preferences.exportNode(new BufferedOutputStream(new FileOutputStream(tmpBackupFile)))
-        preferences.clear()
-        println("If this was accidentally, you can restore the accounts with this file:\n" + tmpBackupFile.getAbsolutePath)
-
-      case _ =>
-    }
-
-    System.exit(0)
-    throw new RuntimeException("Wrong password!")
-  }
+  private[googleauth] def preferences: Preferences = Preferences.userNodeForPackage(getClass)
 
 
   private def initSystemTray(): Option[TrayIcon] = {
@@ -460,7 +410,6 @@ object GoogleAuthenticator extends JFXApp {
         }
       ))
     }
-
 
 
     SystemTray.getSystemTray.add(tray)

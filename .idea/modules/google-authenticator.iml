@@ -22,10 +22,10 @@
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" name="sbt: org.scala-lang:scala-library:2.12.5:jar" level="project" />
-    <orderEntry type="library" name="sbt: commons-codec:commons-codec:1.11:jar" level="project" />
-    <orderEntry type="library" name="sbt: org.scala-lang:scala-reflect:2.12.5:jar" level="project" />
-    <orderEntry type="library" name="sbt: org.scalafx:scalafx_2.12:8.0.144-R12:jar" level="project" />
-    <orderEntry type="library" name="sbt: com.github.peter-gergely-horvath:windpapi4j:1.0:jar" level="project" />
     <orderEntry type="library" name="sbt: net.java.dev.jna:jna:4.2.1:jar" level="project" />
+    <orderEntry type="library" name="sbt: com.github.peter-gergely-horvath:windpapi4j:1.0:jar" level="project" />
+    <orderEntry type="library" name="sbt: org.scalafx:scalafx_2.12:8.0.144-R12:jar" level="project" />
+    <orderEntry type="library" name="sbt: org.scala-lang:scala-reflect:2.12.5:jar" level="project" />
+    <orderEntry type="library" name="sbt: commons-codec:commons-codec:1.11:jar" level="project" />
   </component>
 </module>

@@ -11,6 +11,7 @@
 .idea/**/dictionaries
 .idea/**/shelf
 .idea/**/markdown-navigator*
+.idea/**/kotlinc.xml
 
 # Sensitive or high-churn files
 .idea/**/dataSources/
